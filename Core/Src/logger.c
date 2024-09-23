@@ -18,15 +18,16 @@ void logger_log(logData_t data){
 		logIndex = 0;
 }
 
+FATFS fatFS;
+FIL loggerFile;
+FRESULT fileResult;
+FATFS *fsPtr;
+char txBuffer[250];
+char sdBuffer[250];
+DWORD freeClusters;
+uint32_t totalSize, freeSpace;
+
 void logger_writeToSD(logData_t data){
-	FATFS fatFS;
-	FIL loggerFile;
-	FRESULT fileResult;
-	FATFS *fsPtr;
-	DWORD freeClusters;
-	uint32_t totalSize, freeSpace;
-	char txBuffer[250];
-	char sdBuffer[250];
 
 	//------------------[ Mount The SD Card ]--------------------
 	fileResult = f_mount(&fatFS, "", 1);
@@ -49,6 +50,10 @@ void logger_writeToSD(logData_t data){
 	sprintf(txBuffer, "Free SD Card Space: %lu Bytes\r\n\n", freeSpace);
 	HAL_USART_Transmit(&husart2, (uint8_t *)txBuffer, strlen(txBuffer), 10U);
 
+	// look at adding FF_FS_LOCK for safety on this write, and even
+	// locking on this function so that only one thing can
+	// attempt to write. All others should be silently turned
+	// away.
 
 	//------------------[ Open A Text File For Write & Write Data ]--------------------
 	//Open the file

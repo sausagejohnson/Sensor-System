@@ -30,6 +30,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
+#include "cmsis_os.h"
 #include "fatfs.h"
 
 /* Private includes ----------------------------------------------------------*/
@@ -64,6 +65,13 @@ SPI_HandleTypeDef hspi2;
 UART_HandleTypeDef huart1;
 USART_HandleTypeDef husart2;
 
+/* Definitions for defaultTask */
+osThreadId_t defaultTaskHandle;
+const osThreadAttr_t defaultTask_attributes = {
+  .name = "defaultTask",
+  .stack_size = 1280 * 4,
+  .priority = (osPriority_t) osPriorityBelowNormal,
+};
 /* USER CODE BEGIN PV */
 
 /* USER CODE END PV */
@@ -75,6 +83,8 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART2_Init(void);
 static void MX_RTC_Init(void);
 static void MX_SPI2_Init(void);
+void StartDefaultTask(void *argument);
+
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -85,7 +95,7 @@ static void MX_SPI2_Init(void);
 char debugBuffer[64] = {0};
 
 uint8_t gps_rxBuffer[16] = {0};
-volatile uint8_t gpsBytesInBuffer = 0;
+volatile uint16_t gpsBytesInBuffer = 0;
 
 /* USER CODE END 0 */
 
@@ -125,79 +135,55 @@ int main(void)
   MX_FATFS_Init();
   /* USER CODE BEGIN 2 */
 
+  //Add any pre-RTOS code here before it takes over
+  HAL_GPIO_TogglePin(OnboardLED_GPIO_Port, OnboardLED_Pin);
+
   /* USER CODE END 2 */
+
+  /* Init scheduler */
+  osKernelInitialize();
+
+  /* USER CODE BEGIN RTOS_MUTEX */
+  /* add mutexes, ... */
+  /* USER CODE END RTOS_MUTEX */
+
+  /* USER CODE BEGIN RTOS_SEMAPHORES */
+  /* add semaphores, ... */
+  /* USER CODE END RTOS_SEMAPHORES */
+
+  /* USER CODE BEGIN RTOS_TIMERS */
+  /* start timers, add new ones, ... */
+  /* USER CODE END RTOS_TIMERS */
+
+  /* USER CODE BEGIN RTOS_QUEUES */
+  /* add queues, ... */
+  /* USER CODE END RTOS_QUEUES */
+
+  /* Create the thread(s) */
+  /* creation of defaultTask */
+  defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+
+  /* USER CODE BEGIN RTOS_THREADS */
+  /* add threads, ... */
+  /* USER CODE END RTOS_THREADS */
+
+  /* USER CODE BEGIN RTOS_EVENTS */
+  /* add events, ... */
+  /* USER CODE END RTOS_EVENTS */
+
+  /* Start scheduler */
+  osKernelStart();
+
+  /* We should never get here as control is now taken by the scheduler */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 
-  HAL_GPIO_TogglePin(OnboardLED_GPIO_Port, OnboardLED_Pin);
-
-//RTC
-//  time_t seconds;
-//      seconds = time(NULL);
-//      struct tm *l = localtime(&seconds);
-
-  //Kick off first GPS time information gathering
-  HAL_UART_Receive_IT(&huart1, gps_rxBuffer, 16);
-
   while (1)
   {
 
-	  if (gps_TimeSyncRequired(hrtc) && gpsBytesInBuffer >= 128){
-
-		char *cBuffer;
-		cBuffer = gpsBuffer_GetCircularBuffer();
-		HAL_USART_Transmit(&husart2, (uint8_t*)cBuffer, 128U, 10U);
-		HAL_USART_Transmit(&husart2, (uint8_t*)"\r\n", 2U, 10U);
-
-		gps_DownloadDateTimeViaSatellite(hrtc);
-
-		gpsBytesInBuffer = 0;
-	  }
-
-
-	  //Get a sensor value and log it:
-	  //Get time for logging.
-//	  RTC_TimeTypeDef currentTime;
-//	  RTC_DateTypeDef currentDate;
-//	  HAL_RTC_GetTime(&hrtc, &currentTime, RTC_FORMAT_BIN);
-//	  HAL_RTC_GetDate(&hrtc, &currentDate, RTC_FORMAT_BIN);
-
-	  int i;
-	  for (i=0; i<1; i++){
-		  char timeDateBuffer[30];
-		  getSystemDateTimeFormatted(timeDateBuffer);
-
-		  logData_t data;
-		  strcpy(data.dateTime, timeDateBuffer);
-		  data.typeCode = 'A' + i;
-		  data.value = 167 + i;
-
-		  sprintf(debugBuffer, "Logging: %s, %c, %d\r\n", data.dateTime, data.typeCode, data.value);
-		  HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 10U);
-
-		  logger_log(data);
-	  }
-
-
-
-//	  sprintf(timeDateBuffer, "%02d:%02d:%02d %02d/%02d/%02d",
-//			  currentTime.Hours, currentTime.Minutes, currentTime.Seconds,
-//			  currentDate.Date, currentDate.Month, currentDate.Year
-//	  );
-
-
-
-	  HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, 50U, 10U);
-
-	  HAL_Delay(2000);
-
-
-	  //		if (timeBuffer[0] != '\0'){
-	  //			HAL_USART_Transmit(&husart2, (uint8_t*)"\r\nDate extracted: ", 18U, 10U);
-	  //			HAL_USART_Transmit(&husart2, (uint8_t*)timeBuffer, 12U, 10U);
-	  //			HAL_USART_Transmit(&husart2, (uint8_t*)"\r\n", 2U, 10U);
-	  //
+	HAL_USART_Transmit(&husart2, (uint8_t*)"Error: RTOS not running.\r\n", 26U, 10U);
+	HAL_Delay(3000);
 
     /* USER CODE END WHILE */
 
@@ -483,27 +469,111 @@ static void MX_GPIO_Init(void)
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){ //call every 16 bytes
 //	okToOutput = 1;
 	HAL_GPIO_TogglePin(OnboardLED_GPIO_Port, OnboardLED_Pin);
-	//HAL_USART_Transmit(&husart2, (uint8_t*)UART1_rxBuffer, 16U, 10U);
+
 	gpsBuffer_WriteStreamDataChunkToCircularBuffer(gps_rxBuffer);
 	gpsBytesInBuffer += 16;
-	HAL_UART_Receive_IT(&huart1, gps_rxBuffer, 16);
+
+	if (gps_TimeSyncRequired(hrtc)){
+		HAL_UART_Receive_IT(&huart1, gps_rxBuffer, 16);
+	}
+
 }
 
 //Get time/date as string for logging.
 void getSystemDateTimeFormatted(char* buffer){
 
-	  RTC_TimeTypeDef currentTime;
-	  RTC_DateTypeDef currentDate;
-	  HAL_RTC_GetTime(&hrtc, &currentTime, RTC_FORMAT_BIN);
-	  HAL_RTC_GetDate(&hrtc, &currentDate, RTC_FORMAT_BIN);
+	RTC_TimeTypeDef currentTime;
+	RTC_DateTypeDef currentDate;
+	HAL_RTC_GetTime(&hrtc, &currentTime, RTC_FORMAT_BIN);
+	HAL_RTC_GetDate(&hrtc, &currentDate, RTC_FORMAT_BIN);
 
-	  sprintf(buffer, "%02d:%02d:%02d %02d/%02d/%02d",
-			  currentTime.Hours, currentTime.Minutes, currentTime.Seconds,
-			  currentDate.Date, currentDate.Month, currentDate.Year
-	  );
+	sprintf(buffer, "%02d:%02d:%02d %02d/%02d/%02d",
+		  currentTime.Hours, currentTime.Minutes, currentTime.Seconds,
+		  currentDate.Date, currentDate.Month, currentDate.Year
+	);
 }
 
 /* USER CODE END 4 */
+
+/* USER CODE BEGIN Header_StartDefaultTask */
+/**
+  * @brief  Function implementing the defaultTask thread.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartDefaultTask */
+void StartDefaultTask(void *argument)
+{
+  /* USER CODE BEGIN 5 */
+  HAL_UART_Receive_IT(&huart1, gps_rxBuffer, 16);
+
+  /* Infinite loop */
+  for(;;)
+  {
+
+	HAL_USART_Transmit(&husart2, (uint8_t*) "Running Default Task\r\n", 22U, 10U);
+
+	sprintf(debugBuffer, "gpsBytesInBuffer: %d\r\n", gpsBytesInBuffer);
+	HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 10U);
+
+	if (gps_TimeSyncRequired(hrtc) && gpsBytesInBuffer >= 128){
+
+		char *cBuffer;
+		cBuffer = gpsBuffer_GetCircularBuffer();
+		HAL_USART_Transmit(&husart2, (uint8_t*)cBuffer, 128U, 100U);
+		HAL_USART_Transmit(&husart2, (uint8_t*)"\r\n", 2U, 10U);
+		HAL_USART_Transmit(&husart2, (uint8_t*)"GPS\r\n\r\n", 10U, 10U);
+
+		gps_DownloadDateTimeViaSatellite(hrtc);
+
+		gpsBytesInBuffer = 0;
+	} else {
+
+	}
+
+	char timeDateBuffer[30];
+	getSystemDateTimeFormatted(timeDateBuffer);
+
+	logData_t data;
+	strcpy(data.dateTime, timeDateBuffer);
+	data.typeCode = 'A';
+	data.value = 167;
+
+	sprintf(debugBuffer, "Logging from task: %s, %c, %d\r\n", data.dateTime, data.typeCode, data.value);
+	HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 10U);
+
+	logger_log(data);
+
+
+	HAL_USART_Transmit(&husart2, (uint8_t*)"2 secs to remove card.\r\n", 24U, 10U);
+	osDelay(2000);
+	HAL_USART_Transmit(&husart2, (uint8_t*)"Do not remove card.\r\n", 21U, 10U);
+
+
+  }
+  /* USER CODE END 5 */
+}
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM6 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM6) {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+
+  /* USER CODE END Callback 1 */
+}
 
 /**
   * @brief  This function is executed in case of error occurrence.
