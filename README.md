@@ -10,7 +10,7 @@ Code is in C.
 
 The project is developed under STM32CubeIDE.
 
-Libraries used FATFS and FATFS_SD SPI by Khaled Magdy.
+Libraries used FATFS, FreeRTOS and FATFS_SD SPI (by Khaled Magdy).
 
 
 ## Hardware, Modules and Wiring
@@ -21,8 +21,9 @@ Modules currently connected:
 
  - TF Card Memory Shield Module (SPI)
  - GY-NEO6MV2 NEO-6M GPS Module (RX)
+ - Red Generic Turbidity Module (Analogue)
 
-Wiring is currently documented in the code.
+The wiring is currently documented in the code.
 
 
 ## More details
