@@ -26,9 +26,13 @@ char txBuffer[250];
 char sdBuffer[250];
 DWORD freeClusters;
 uint32_t totalSize, freeSpace;
+int testInProgress = 0;
 
 void logger_writeToSD(logData_t data){
+	if (testInProgress == 1)
+		return;
 
+	testInProgress = 1;
 	//------------------[ Mount The SD Card ]--------------------
 	fileResult = f_mount(&fatFS, "", 1);
 	if (fileResult != FR_OK)
@@ -97,4 +101,6 @@ void logger_writeToSD(logData_t data){
 
 	// Close The File
 	f_close(&loggerFile);
+
+	testInProgress = 0;
 }

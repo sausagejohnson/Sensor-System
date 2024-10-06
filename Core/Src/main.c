@@ -25,6 +25,8 @@
  * PB13 (CN10/Pin30) Flash SPI CLK
  * PB14 (CN10/Pin28) Flash SPI MISO
  * PB15 (CN10/Pin26) Flash SPI MOSI
+ *
+ * A1 (PA1) for Turbidity sensor
  * */
 
 /* USER CODE END Header */
@@ -58,6 +60,8 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
+
 RTC_HandleTypeDef hrtc;
 
 SPI_HandleTypeDef hspi2;
@@ -69,8 +73,27 @@ USART_HandleTypeDef husart2;
 osThreadId_t defaultTaskHandle;
 const osThreadAttr_t defaultTask_attributes = {
   .name = "defaultTask",
-  .stack_size = 1280 * 4,
+  .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityBelowNormal,
+};
+/* Definitions for sensorTask */
+osThreadId_t sensorTaskHandle;
+const osThreadAttr_t sensorTask_attributes = {
+  .name = "sensorTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for loggingTask */
+osThreadId_t loggingTaskHandle;
+const osThreadAttr_t loggingTask_attributes = {
+  .name = "loggingTask",
+  .stack_size = 1280 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for sensorQueue */
+osMessageQueueId_t sensorQueueHandle;
+const osMessageQueueAttr_t sensorQueue_attributes = {
+  .name = "sensorQueue"
 };
 /* USER CODE BEGIN PV */
 
@@ -83,7 +106,10 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART2_Init(void);
 static void MX_RTC_Init(void);
 static void MX_SPI2_Init(void);
+static void MX_ADC1_Init(void);
 void StartDefaultTask(void *argument);
+void StartSensorTask(void *argument);
+void StartLoggingTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -96,6 +122,8 @@ char debugBuffer[64] = {0};
 
 uint8_t gps_rxBuffer[16] = {0};
 volatile uint16_t gpsBytesInBuffer = 0;
+volatile uint8_t startWaterSensing = 0;
+volatile uint16_t waterSensorValue = 0;
 
 /* USER CODE END 0 */
 
@@ -133,6 +161,7 @@ int main(void)
   MX_RTC_Init();
   MX_SPI2_Init();
   MX_FATFS_Init();
+  MX_ADC1_Init();
   /* USER CODE BEGIN 2 */
 
   //Add any pre-RTOS code here before it takes over
@@ -155,6 +184,10 @@ int main(void)
   /* start timers, add new ones, ... */
   /* USER CODE END RTOS_TIMERS */
 
+  /* Create the queue(s) */
+  /* creation of sensorQueue */
+  sensorQueueHandle = osMessageQueueNew (16, sizeof(uint16_t), &sensorQueue_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
@@ -162,6 +195,12 @@ int main(void)
   /* Create the thread(s) */
   /* creation of defaultTask */
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
+
+  /* creation of sensorTask */
+  sensorTaskHandle = osThreadNew(StartSensorTask, NULL, &sensorTask_attributes);
+
+  /* creation of loggingTask */
+  loggingTaskHandle = osThreadNew(StartLoggingTask, NULL, &loggingTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -181,9 +220,22 @@ int main(void)
 
   while (1)
   {
+	HAL_GPIO_TogglePin(OnboardLED_GPIO_Port, OnboardLED_Pin);
+	HAL_GPIO_WritePin(TestPin_GPIO_Port, TestPin_Pin, GPIO_PIN_SET);
 
-	HAL_USART_Transmit(&husart2, (uint8_t*)"Error: RTOS not running.\r\n", 26U, 10U);
-	HAL_Delay(3000);
+	HAL_ADC_Start(&hadc1);
+	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+	uint32_t val = HAL_ADC_GetValue(&hadc1);
+
+	sprintf(debugBuffer, "Water: %d\r\n", (int)val);
+	HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 1U);
+
+	HAL_GPIO_WritePin(TestPin_GPIO_Port, TestPin_Pin, GPIO_PIN_RESET);
+
+	HAL_Delay(100);
+
+//	HAL_USART_Transmit(&husart2, (uint8_t*)"Error: RTOS not running.\r\n", 26U, 10U);
+//	HAL_Delay(3000);
 
     /* USER CODE END WHILE */
 
@@ -232,14 +284,81 @@ void SystemClock_Config(void)
     Error_Handler();
   }
   PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_USART1|RCC_PERIPHCLK_USART2
-                              |RCC_PERIPHCLK_RTC;
+                              |RCC_PERIPHCLK_RTC|RCC_PERIPHCLK_ADC12;
   PeriphClkInit.Usart1ClockSelection = RCC_USART1CLKSOURCE_PCLK2;
   PeriphClkInit.Usart2ClockSelection = RCC_USART2CLKSOURCE_PCLK1;
+  PeriphClkInit.Adc12ClockSelection = RCC_ADC12PLLCLK_DIV1;
   PeriphClkInit.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_MultiModeTypeDef multimode = {0};
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+
+  /** Common config
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc1.Init.Resolution = ADC_RESOLUTION_12B;
+  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc1.Init.LowPowerAutoWait = DISABLE;
+  hadc1.Init.Overrun = ADC_OVR_DATA_OVERWRITTEN;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure the ADC multi-mode
+  */
+  multimode.Mode = ADC_MODE_INDEPENDENT;
+  if (HAL_ADCEx_MultiModeConfigChannel(&hadc1, &multimode) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_2;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.SamplingTime = ADC_SAMPLETIME_1CYCLE_5;
+  sConfig.OffsetNumber = ADC_OFFSET_NONE;
+  sConfig.Offset = 0;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
 }
 
 /**
@@ -432,7 +551,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(OnboardLED_GPIO_Port, OnboardLED_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, OnboardLED_Pin|TestPin_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(SPI2_CS_GPIO_Port, SPI2_CS_Pin, GPIO_PIN_SET);
@@ -443,12 +562,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : OnboardLED_Pin */
-  GPIO_InitStruct.Pin = OnboardLED_Pin;
+  /*Configure GPIO pins : OnboardLED_Pin TestPin_Pin */
+  GPIO_InitStruct.Pin = OnboardLED_Pin|TestPin_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(OnboardLED_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pin : SPI2_CS_Pin */
   GPIO_InitStruct.Pin = SPI2_CS_Pin;
@@ -479,6 +598,14 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){ //call every 16 bytes
 
 }
 
+void ADC_IRQHandler(){ //do I need this? Test without it.
+    HAL_ADC_IRQHandler(&hadc1);
+}
+
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc){
+	waterSensorValue = HAL_ADC_GetValue(&hadc1);
+}
+
 //Get time/date as string for logging.
 void getSystemDateTimeFormatted(char* buffer){
 
@@ -493,6 +620,16 @@ void getSystemDateTimeFormatted(char* buffer){
 	);
 }
 
+void DebugOutput(const char *message, int16_t number){
+	//max: 93 message chars, 5 number chars, 2 lf/cr
+	char buffer[100];
+	snprintf(buffer, sizeof(buffer), "%s%d\r\n", message, number);
+
+	int length = strlen(buffer);
+	HAL_USART_Transmit(&husart2, (uint8_t *)buffer, length, 10U);
+
+}
+
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -505,53 +642,165 @@ void getSystemDateTimeFormatted(char* buffer){
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
+//	while(1){
+//		DebugOutput("StartDefaultTask", 1);
+//		osDelay(2000);
+//	}
   HAL_UART_Receive_IT(&huart1, gps_rxBuffer, 16);
 
   /* Infinite loop */
   for(;;)
   {
-
-	HAL_USART_Transmit(&husart2, (uint8_t*) "Running Default Task\r\n", 22U, 10U);
+	DebugOutput("Running Default Task.", 1);
 
 	sprintf(debugBuffer, "gpsBytesInBuffer: %d\r\n", gpsBytesInBuffer);
 	HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 10U);
 
-	if (gps_TimeSyncRequired(hrtc) && gpsBytesInBuffer >= 128){
+	int gpsTimeSyncRequired = gps_TimeSyncRequired(hrtc);
 
-		char *cBuffer;
-		cBuffer = gpsBuffer_GetCircularBuffer();
-		HAL_USART_Transmit(&husart2, (uint8_t*)cBuffer, 128U, 100U);
-		HAL_USART_Transmit(&husart2, (uint8_t*)"\r\n", 2U, 10U);
-		HAL_USART_Transmit(&husart2, (uint8_t*)"GPS\r\n\r\n", 10U, 10U);
+	if (gpsTimeSyncRequired){
 
-		gps_DownloadDateTimeViaSatellite(hrtc);
+		if 	(gpsBytesInBuffer >= 128){
+			char *cBuffer;
+			cBuffer = gpsBuffer_GetCircularBuffer();
+			HAL_USART_Transmit(&husart2, (uint8_t*)cBuffer, 128U, 100U);
+			HAL_USART_Transmit(&husart2, (uint8_t*)"\r\n", 2U, 10U);
+			DebugOutput("GPS", 1);
 
-		gpsBytesInBuffer = 0;
+			gps_DownloadDateTimeViaSatellite(hrtc);
+
+			gpsBytesInBuffer = 0;
+		}
+
 	} else {
+//		RTC_HandleTypeDef rtc;
+//		RTC_DateTypeDef currentDate;
+//		HAL_RTC_GetDate(&rtc, &currentDate, RTC_FORMAT_BIN);
 
+		DebugOutput("Timesync not required, Water sensing.", 1);
+		startWaterSensing = 1;
 	}
 
-	char timeDateBuffer[30];
-	getSystemDateTimeFormatted(timeDateBuffer);
 
-	logData_t data;
-	strcpy(data.dateTime, timeDateBuffer);
-	data.typeCode = 'A';
-	data.value = 167;
-
-	sprintf(debugBuffer, "Logging from task: %s, %c, %d\r\n", data.dateTime, data.typeCode, data.value);
-	HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 10U);
-
-	logger_log(data);
-
-
-	HAL_USART_Transmit(&husart2, (uint8_t*)"2 secs to remove card.\r\n", 24U, 10U);
 	osDelay(2000);
-	HAL_USART_Transmit(&husart2, (uint8_t*)"Do not remove card.\r\n", 21U, 10U);
 
 
   }
   /* USER CODE END 5 */
+}
+
+/* USER CODE BEGIN Header_StartSensorTask */
+/**
+* @brief Function implementing the sensorTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartSensorTask */
+void StartSensorTask(void *argument)
+{
+  /* USER CODE BEGIN StartSensorTask */
+  /* Infinite loop */
+//  uint8_t numberToSend = 0;
+//	while(1){
+//		DebugOutput("StartSensorTask", 1);
+//		osDelay(2000);
+//	}
+
+  for(;;)
+  {
+	DebugOutput("StartSensorTask: ", 99);
+	DebugOutput("startWaterSensing --> : ", startWaterSensing);
+	if (startWaterSensing == 1){
+		//perform task, sense and push to queue
+
+		//if there is an existing sense value, log it
+//		if (waterSensorValue > 0){
+			int16_t waterSensorValueForQueue = waterSensorValue;
+			DebugOutput("WATER VALUE TO LOG -->: ", waterSensorValueForQueue);
+			osStatus_t status = osMessageQueuePut(sensorQueueHandle, &waterSensorValueForQueue, 0, 0);
+			DebugOutput("SensorMessagePut: ", status);
+
+			DebugOutput("Water value sent to the queue: ", waterSensorValueForQueue);
+//		}
+
+
+		//Start the sensor
+
+		HAL_ADC_Start_IT(&hadc1);
+
+	}
+    osDelay(2000);
+  }
+  /* USER CODE END StartSensorTask */
+}
+
+/* USER CODE BEGIN Header_StartLoggingTask */
+/**
+* @brief Only purpose is to monitor the logging queue and therefore log to SD card storage
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartLoggingTask */
+void StartLoggingTask(void *argument)
+{
+  /* USER CODE BEGIN StartLoggingTask */
+//	while(1){
+//		DebugOutput("StartLoggingTask", 1);
+//		osDelay(2000);
+//	}
+  uint16_t receivedNumber = 0;
+
+  /* Infinite loop */
+  for(;;)
+  {
+	DebugOutput("Logging from the queue: ", 1);
+
+	if (startWaterSensing == 1){
+
+		uint32_t queueCount = osMessageQueueGetCount(sensorQueueHandle);
+
+		DebugOutput("SensorQueueCount: ", queueCount);
+
+		if (queueCount > 0){
+			osStatus_t status = osMessageQueueGet(sensorQueueHandle, &receivedNumber, NULL, 2);
+
+			if (status == osOK){
+//				waterSensorValue = 0; //clear value for next reading.
+
+				DebugOutput("Received...: ", receivedNumber);
+
+				char timeDateBuffer[30];
+				getSystemDateTimeFormatted(timeDateBuffer);
+
+				logData_t data;
+				strcpy(data.dateTime, timeDateBuffer);
+				data.typeCode = 'W';
+				data.value = receivedNumber;
+
+				sprintf(debugBuffer, "Logging from task: %s, %c, %d\r\n", data.dateTime, data.typeCode, data.value);
+				HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 10U);
+
+//				portENTER_CRITICAL();
+				logger_log(data);
+//				portEXIT_CRITICAL();
+
+				//DebugOutput("2 secs to remove card.", 0);
+				osDelay(2000);
+				//DebugOutput("End Log. Do not remove card.", 0);
+
+
+				receivedNumber = 0;
+			} else {
+				DebugOutput("Error from queue...: ", status);
+			}
+		}
+
+
+	}
+    osDelay(1000);
+
+  }
+  /* USER CODE END StartLoggingTask */
 }
 
 /**

@@ -49,7 +49,7 @@ void gps_DownloadDateTimeViaSatellite(RTC_HandleTypeDef rtc){
 }
 
 int gps_TimeSyncRequired(RTC_HandleTypeDef rtc){
-	if (numberOfAttempts > 30)
+	if (numberOfAttempts > 10)
 		return 0;
 
 	RTC_DateTypeDef currentDate;

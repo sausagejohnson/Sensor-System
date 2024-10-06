@@ -53,7 +53,7 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-
+void DebugOutput(const char *message, int16_t number);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
@@ -67,6 +67,8 @@ void Error_Handler(void);
 #define OnboardLED_GPIO_Port GPIOA
 #define SPI2_CS_Pin GPIO_PIN_12
 #define SPI2_CS_GPIO_Port GPIOB
+#define TestPin_Pin GPIO_PIN_8
+#define TestPin_GPIO_Port GPIOA
 #define GPS_RX_Pin GPIO_PIN_10
 #define GPS_RX_GPIO_Port GPIOA
 #define TMS_Pin GPIO_PIN_13
