@@ -75,8 +75,15 @@ void DebugOutput(const char *message, int16_t number);
 #define TMS_GPIO_Port GPIOA
 #define TCK_Pin GPIO_PIN_14
 #define TCK_GPIO_Port GPIOA
+#define SPI3_NSS_Pin GPIO_PIN_2
+#define SPI3_NSS_GPIO_Port GPIOD
 #define SWO_Pin GPIO_PIN_3
 #define SWO_GPIO_Port GPIOB
+#define LORA_RESET_Pin GPIO_PIN_4
+#define LORA_RESET_GPIO_Port GPIOB
+#define DIO0_EXTI5_Pin GPIO_PIN_5
+#define DIO0_EXTI5_GPIO_Port GPIOB
+#define DIO0_EXTI5_EXTI_IRQn EXTI9_5_IRQn
 
 /* USER CODE BEGIN Private defines */
 

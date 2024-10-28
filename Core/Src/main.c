@@ -26,6 +26,15 @@
  * PB14 (CN10/Pin28) Flash SPI MISO
  * PB15 (CN10/Pin26) Flash SPI MOSI
  *
+ * PA8/D7 Test Pin
+ *
+ * PD2 (CN6/Pin4) LORA SPI NSS
+ * PC10 (CN7/Pin1) LORA SPI CLK
+ * PC11 (CN6/Pin2) LORA SPI MISO
+ * PC12 (CN7/Pin3) LORA SPI MOSI
+ * PB4/D5 (CN9/Pin6) LORA RESET
+ * PB5/D4 (CN9/Pin5) DIO0 External interrupt
+ *
  * A1 (PA1) for Turbidity sensor
  * */
 
@@ -38,6 +47,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 //#include "buffer.h"
+#include "lora_sx1276.h"
 #include "gps.h"
 #include "logger.h"
 #include <time.h>
@@ -65,6 +75,8 @@ ADC_HandleTypeDef hadc1;
 RTC_HandleTypeDef hrtc;
 
 SPI_HandleTypeDef hspi2;
+SPI_HandleTypeDef hspi3;
+DMA_HandleTypeDef hdma_spi3_tx;
 
 UART_HandleTypeDef huart1;
 USART_HandleTypeDef husart2;
@@ -102,11 +114,13 @@ const osMessageQueueAttr_t sensorQueue_attributes = {
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_Init(void);
 static void MX_RTC_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_ADC1_Init(void);
+static void MX_SPI3_Init(void);
 void StartDefaultTask(void *argument);
 void StartSensorTask(void *argument);
 void StartLoggingTask(void *argument);
@@ -125,6 +139,11 @@ volatile uint16_t gpsBytesInBuffer = 0;
 volatile uint8_t startWaterSensing = 0;
 volatile uint16_t waterSensorValue = 0;
 
+lora_sx1276 lora;
+uint8_t RXBuffer[32];
+volatile uint8_t RXBufferStatus = 0; //1 is good and ready to read.
+
+volatile uint8_t interruptTriggerDebug = 0; //For testing interrupts
 /* USER CODE END 0 */
 
 /**
@@ -156,16 +175,29 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART1_UART_Init();
   MX_USART2_Init();
   MX_RTC_Init();
   MX_SPI2_Init();
   MX_FATFS_Init();
   MX_ADC1_Init();
+  MX_SPI3_Init();
   /* USER CODE BEGIN 2 */
 
   //Add any pre-RTOS code here before it takes over
   HAL_GPIO_TogglePin(OnboardLED_GPIO_Port, OnboardLED_Pin);
+
+
+
+  // SX1276 compatible module connected to SPI1, NSS pin connected to GPIO with label LORA_NSS
+  uint8_t res = lora_init(&lora, &hspi3, SPI3_NSS_GPIO_Port, SPI3_NSS_Pin, LORA_BASE_FREQUENCY_US);
+
+  if (res != LORA_OK) {
+  	DebugOutput("RFM95 init failed", 999);
+  } else {
+	DebugOutput("RFM95 init success", 999);
+  }
 
   /* USER CODE END 2 */
 
@@ -220,19 +252,19 @@ int main(void)
 
   while (1)
   {
-	HAL_GPIO_TogglePin(OnboardLED_GPIO_Port, OnboardLED_Pin);
-	HAL_GPIO_WritePin(TestPin_GPIO_Port, TestPin_Pin, GPIO_PIN_SET);
-
-	HAL_ADC_Start(&hadc1);
-	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-	uint32_t val = HAL_ADC_GetValue(&hadc1);
-
-	sprintf(debugBuffer, "Water: %d\r\n", (int)val);
-	HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 1U);
-
-	HAL_GPIO_WritePin(TestPin_GPIO_Port, TestPin_Pin, GPIO_PIN_RESET);
-
-	HAL_Delay(100);
+//	HAL_GPIO_TogglePin(OnboardLED_GPIO_Port, OnboardLED_Pin);
+//	HAL_GPIO_WritePin(TestPin_GPIO_Port, TestPin_Pin, GPIO_PIN_SET);
+//
+//	HAL_ADC_Start(&hadc1);
+//	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+//	uint32_t val = HAL_ADC_GetValue(&hadc1);
+//
+//	sprintf(debugBuffer, "Water: %d\r\n", (int)val);
+//	HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 1U);
+//
+//	HAL_GPIO_WritePin(TestPin_GPIO_Port, TestPin_Pin, GPIO_PIN_RESET);
+//
+//	HAL_Delay(100);
 
 //	HAL_USART_Transmit(&husart2, (uint8_t*)"Error: RTOS not running.\r\n", 26U, 10U);
 //	HAL_Delay(3000);
@@ -465,6 +497,46 @@ static void MX_SPI2_Init(void)
 }
 
 /**
+  * @brief SPI3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI3_Init(void)
+{
+
+  /* USER CODE BEGIN SPI3_Init 0 */
+
+  /* USER CODE END SPI3_Init 0 */
+
+  /* USER CODE BEGIN SPI3_Init 1 */
+
+  /* USER CODE END SPI3_Init 1 */
+  /* SPI3 parameter configuration*/
+  hspi3.Instance = SPI3;
+  hspi3.Init.Mode = SPI_MODE_MASTER;
+  hspi3.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi3.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi3.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi3.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi3.Init.NSS = SPI_NSS_SOFT;
+  hspi3.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+  hspi3.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi3.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi3.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi3.Init.CRCPolynomial = 7;
+  hspi3.Init.CRCLength = SPI_CRC_LENGTH_DATASIZE;
+  hspi3.Init.NSSPMode = SPI_NSS_PULSE_ENABLE;
+  if (HAL_SPI_Init(&hspi3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI3_Init 2 */
+
+  /* USER CODE END SPI3_Init 2 */
+
+}
+
+/**
   * @brief USART1 Initialization Function
   * @param None
   * @retval None
@@ -534,6 +606,22 @@ static void MX_USART2_Init(void)
 }
 
 /**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA2_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA2_Channel2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Channel2_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Channel2_IRQn);
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -549,12 +637,16 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOF_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, OnboardLED_Pin|TestPin_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(SPI2_CS_GPIO_Port, SPI2_CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, SPI2_CS_Pin|LORA_RESET_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(SPI3_NSS_GPIO_Port, SPI3_NSS_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -569,12 +661,29 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : SPI2_CS_Pin */
-  GPIO_InitStruct.Pin = SPI2_CS_Pin;
+  /*Configure GPIO pins : SPI2_CS_Pin LORA_RESET_Pin */
+  GPIO_InitStruct.Pin = SPI2_CS_Pin|LORA_RESET_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(SPI2_CS_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : SPI3_NSS_Pin */
+  GPIO_InitStruct.Pin = SPI3_NSS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(SPI3_NSS_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : DIO0_EXTI5_Pin */
+  GPIO_InitStruct.Pin = DIO0_EXTI5_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(DIO0_EXTI5_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
 /* USER CODE BEGIN MX_GPIO_Init_2 */
 /* USER CODE END MX_GPIO_Init_2 */
@@ -630,6 +739,28 @@ void DebugOutput(const char *message, int16_t number){
 
 }
 
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
+	if (GPIO_Pin == DIO0_EXTI5_Pin){
+		interruptTriggerDebug = 1;
+
+		if (RXBufferStatus == 1)
+			return; //don't accept another packet until the first is taken and processed.
+
+		uint8_t len = lora_receive_packet(&lora, RXBuffer, sizeof(RXBuffer), NULL); //no storing error info yet
+		if (len > 0) {
+//			lora_mode_standby(&lora);
+			RXBufferStatus = 1;
+		}
+		lora_clear_interrupt_rx_all(&lora);
+	}
+}
+
+void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi){
+	interruptTriggerDebug = 5;
+	lora_send_packet_dma_complete(&lora);
+	lora_mode_receive_continuous(&lora);
+}
+
 /* USER CODE END 4 */
 
 /* USER CODE BEGIN Header_StartDefaultTask */
@@ -648,6 +779,11 @@ void StartDefaultTask(void *argument)
 //	}
   HAL_UART_Receive_IT(&huart1, gps_rxBuffer, 16);
 
+  lora_mode_receive_continuous(&lora);
+  //lora_mode_receive_single(&lora);
+
+//  lora_enable_interrupt_tx_done(&lora);
+  lora_enable_interrupt_rx_done(&lora);
   /* Infinite loop */
   for(;;)
   {
@@ -681,9 +817,41 @@ void StartDefaultTask(void *argument)
 		startWaterSensing = 1;
 	}
 
+	// Receive buffer
+	DebugOutput("===========> RXBufferStatus: ", RXBufferStatus);
+	if (RXBufferStatus == 1){
 
+		HAL_USART_Transmit(&husart2, (uint8_t*)RXBuffer, 32U, 10U);
+		HAL_USART_Transmit(&husart2, (uint8_t*)"\r\n", 2U, 10U);
+
+
+//		DebugOutput("===========> FAKE ACK BUT NOT SENDING. ", 999);
+//		lora_mode_standby(&lora);
+//		uint8_t res =
+//		lora_send_packet_blocking(&lora, (uint8_t *)"acknowledge-from-system", 23, 100U);
+		lora_send_packet_dma_start(&lora, (uint8_t *)"acknowledge-from-system", 23);
+//		if (res != LORA_OK) {
+//			HAL_USART_Transmit(&husart2, (uint8_t *)"Failed to ack from system\n\r", 27U, 100U);
+//		} else {
+//			HAL_USART_Transmit(&husart2, (uint8_t *)"Success ack from system\n\r", 25U, 100U);
+//		}
+
+//		lora_mode_receive_continuous(&lora);
+		//  lora_mode_receive_single(&lora);
+//		lora_clear_interrupt_rx_all(&lora);
+//		lora_enable_interrupt_rx_done(&lora);
+		RXBufferStatus = 0; //clear: ready for interrupt to accept the next LoRa packet.
+		osDelay(200);
+	}
+
+	if (interruptTriggerDebug == 1){
+		interruptTriggerDebug = 0;
+		DebugOutput("------------ INTERRUPT TRIGGERED ------------", 999);
+	}
+
+	DebugOutput("About to finish Default Task.", 1);
 	osDelay(2000);
-
+	DebugOutput("Finished Default Task.", 1);
 
   }
   /* USER CODE END 5 */
@@ -701,7 +869,7 @@ void StartSensorTask(void *argument)
   /* USER CODE BEGIN StartSensorTask */
   /* Infinite loop */
 //  uint8_t numberToSend = 0;
-//	while(1){
+//	while (1){
 //		DebugOutput("StartSensorTask", 1);
 //		osDelay(2000);
 //	}
