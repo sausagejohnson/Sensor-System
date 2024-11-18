@@ -32,7 +32,7 @@
  * PC10 (CN7/Pin1) LORA SPI CLK
  * PC11 (CN6/Pin2) LORA SPI MISO
  * PC12 (CN7/Pin3) LORA SPI MOSI
- * PB4/D5 (CN9/Pin6) LORA RESET
+ * PA15 (CN7/Pin17) LORA RESET
  * PB5/D4 (CN9/Pin5) DIO0 External interrupt
  *
  * A1 (PA1) for Turbidity sensor
@@ -102,10 +102,29 @@ const osThreadAttr_t loggingTask_attributes = {
   .stack_size = 1280 * 4,
   .priority = (osPriority_t) osPriorityLow,
 };
+/* Definitions for commandTask */
+osThreadId_t commandTaskHandle;
+const osThreadAttr_t commandTask_attributes = {
+  .name = "commandTask",
+  .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
+/* Definitions for commProcessTask */
+osThreadId_t commProcessTaskHandle;
+const osThreadAttr_t commProcessTask_attributes = {
+  .name = "commProcessTask",
+  .stack_size = 256 * 4,
+  .priority = (osPriority_t) osPriorityLow,
+};
 /* Definitions for sensorQueue */
 osMessageQueueId_t sensorQueueHandle;
 const osMessageQueueAttr_t sensorQueue_attributes = {
   .name = "sensorQueue"
+};
+/* Definitions for commandQueue */
+osMessageQueueId_t commandQueueHandle;
+const osMessageQueueAttr_t commandQueue_attributes = {
+  .name = "commandQueue"
 };
 /* USER CODE BEGIN PV */
 
@@ -124,6 +143,8 @@ static void MX_SPI3_Init(void);
 void StartDefaultTask(void *argument);
 void StartSensorTask(void *argument);
 void StartLoggingTask(void *argument);
+void StartCommandTask(void *argument);
+void StartCommandProcessTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 
@@ -140,7 +161,7 @@ volatile uint8_t startWaterSensing = 0;
 volatile uint16_t waterSensorValue = 0;
 
 lora_sx1276 lora;
-uint8_t RXBuffer[32];
+uint8_t RXBuffer[6];
 volatile uint8_t RXBufferStatus = 0; //1 is good and ready to read.
 
 volatile uint8_t interruptTriggerDebug = 0; //For testing interrupts
@@ -188,15 +209,13 @@ int main(void)
   //Add any pre-RTOS code here before it takes over
   HAL_GPIO_TogglePin(OnboardLED_GPIO_Port, OnboardLED_Pin);
 
-
-
   // SX1276 compatible module connected to SPI1, NSS pin connected to GPIO with label LORA_NSS
   uint8_t res = lora_init(&lora, &hspi3, SPI3_NSS_GPIO_Port, SPI3_NSS_Pin, LORA_BASE_FREQUENCY_US);
 
   if (res != LORA_OK) {
-  	DebugOutput("RFM95 init failed", 999);
+  	DebugOutput("RFM95 init failed", res);
   } else {
-	DebugOutput("RFM95 init success", 999);
+	DebugOutput("RFM95 init success", res);
   }
 
   /* USER CODE END 2 */
@@ -220,6 +239,9 @@ int main(void)
   /* creation of sensorQueue */
   sensorQueueHandle = osMessageQueueNew (16, sizeof(uint16_t), &sensorQueue_attributes);
 
+  /* creation of commandQueue */
+  commandQueueHandle = osMessageQueueNew (16, 8, &commandQueue_attributes);
+
   /* USER CODE BEGIN RTOS_QUEUES */
   /* add queues, ... */
   /* USER CODE END RTOS_QUEUES */
@@ -233,6 +255,12 @@ int main(void)
 
   /* creation of loggingTask */
   loggingTaskHandle = osThreadNew(StartLoggingTask, NULL, &loggingTask_attributes);
+
+  /* creation of commandTask */
+  commandTaskHandle = osThreadNew(StartCommandTask, NULL, &commandTask_attributes);
+
+  /* creation of commProcessTask */
+  commProcessTaskHandle = osThreadNew(StartCommandProcessTask, NULL, &commProcessTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
   /* add threads, ... */
@@ -252,22 +280,9 @@ int main(void)
 
   while (1)
   {
-//	HAL_GPIO_TogglePin(OnboardLED_GPIO_Port, OnboardLED_Pin);
-//	HAL_GPIO_WritePin(TestPin_GPIO_Port, TestPin_Pin, GPIO_PIN_SET);
-//
-//	HAL_ADC_Start(&hadc1);
-//	HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-//	uint32_t val = HAL_ADC_GetValue(&hadc1);
-//
-//	sprintf(debugBuffer, "Water: %d\r\n", (int)val);
-//	HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 1U);
-//
-//	HAL_GPIO_WritePin(TestPin_GPIO_Port, TestPin_Pin, GPIO_PIN_RESET);
-//
-//	HAL_Delay(100);
+	  DebugOutput("Warning! Should not reach here under FreeRTOS. ", 999);
+	  HAL_Delay(3000);
 
-//	HAL_USART_Transmit(&husart2, (uint8_t*)"Error: RTOS not running.\r\n", 26U, 10U);
-//	HAL_Delay(3000);
 
     /* USER CODE END WHILE */
 
@@ -643,7 +658,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, OnboardLED_Pin|TestPin_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, SPI2_CS_Pin|LORA_RESET_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(SPI2_CS_GPIO_Port, SPI2_CS_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(LORA_RESET_GPIO_Port, LORA_RESET_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(SPI3_NSS_GPIO_Port, SPI3_NSS_Pin, GPIO_PIN_SET);
@@ -654,19 +672,19 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : OnboardLED_Pin TestPin_Pin */
-  GPIO_InitStruct.Pin = OnboardLED_Pin|TestPin_Pin;
+  /*Configure GPIO pins : OnboardLED_Pin TestPin_Pin LORA_RESET_Pin */
+  GPIO_InitStruct.Pin = OnboardLED_Pin|TestPin_Pin|LORA_RESET_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : SPI2_CS_Pin LORA_RESET_Pin */
-  GPIO_InitStruct.Pin = SPI2_CS_Pin|LORA_RESET_Pin;
+  /*Configure GPIO pin : SPI2_CS_Pin */
+  GPIO_InitStruct.Pin = SPI2_CS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_Init(SPI2_CS_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : SPI3_NSS_Pin */
   GPIO_InitStruct.Pin = SPI3_NSS_Pin;
@@ -740,6 +758,7 @@ void DebugOutput(const char *message, int16_t number){
 }
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
+
 	if (GPIO_Pin == DIO0_EXTI5_Pin){
 		interruptTriggerDebug = 1;
 
@@ -747,18 +766,12 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 			return; //don't accept another packet until the first is taken and processed.
 
 		uint8_t len = lora_receive_packet(&lora, RXBuffer, sizeof(RXBuffer), NULL); //no storing error info yet
-		if (len > 0) {
-//			lora_mode_standby(&lora);
-			RXBufferStatus = 1;
-		}
-		lora_clear_interrupt_rx_all(&lora);
-	}
-}
 
-void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi){
-	interruptTriggerDebug = 5;
-	lora_send_packet_dma_complete(&lora);
-	lora_mode_receive_continuous(&lora);
+		if (len > 0) {
+			RXBufferStatus = 1;
+			interruptTriggerDebug = len;
+		}
+	}
 }
 
 /* USER CODE END 4 */
@@ -773,17 +786,9 @@ void HAL_SPI_TxCpltCallback(SPI_HandleTypeDef *hspi){
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-//	while(1){
-//		DebugOutput("StartDefaultTask", 1);
-//		osDelay(2000);
-//	}
+
   HAL_UART_Receive_IT(&huart1, gps_rxBuffer, 16);
 
-  lora_mode_receive_continuous(&lora);
-  //lora_mode_receive_single(&lora);
-
-//  lora_enable_interrupt_tx_done(&lora);
-  lora_enable_interrupt_rx_done(&lora);
   /* Infinite loop */
   for(;;)
   {
@@ -817,40 +822,8 @@ void StartDefaultTask(void *argument)
 		startWaterSensing = 1;
 	}
 
-	// Receive buffer
-	DebugOutput("===========> RXBufferStatus: ", RXBufferStatus);
-	if (RXBufferStatus == 1){
 
-		HAL_USART_Transmit(&husart2, (uint8_t*)RXBuffer, 32U, 10U);
-		HAL_USART_Transmit(&husart2, (uint8_t*)"\r\n", 2U, 10U);
-
-
-//		DebugOutput("===========> FAKE ACK BUT NOT SENDING. ", 999);
-//		lora_mode_standby(&lora);
-//		uint8_t res =
-//		lora_send_packet_blocking(&lora, (uint8_t *)"acknowledge-from-system", 23, 100U);
-		lora_send_packet_dma_start(&lora, (uint8_t *)"acknowledge-from-system", 23);
-//		if (res != LORA_OK) {
-//			HAL_USART_Transmit(&husart2, (uint8_t *)"Failed to ack from system\n\r", 27U, 100U);
-//		} else {
-//			HAL_USART_Transmit(&husart2, (uint8_t *)"Success ack from system\n\r", 25U, 100U);
-//		}
-
-//		lora_mode_receive_continuous(&lora);
-		//  lora_mode_receive_single(&lora);
-//		lora_clear_interrupt_rx_all(&lora);
-//		lora_enable_interrupt_rx_done(&lora);
-		RXBufferStatus = 0; //clear: ready for interrupt to accept the next LoRa packet.
-		osDelay(200);
-	}
-
-	if (interruptTriggerDebug == 1){
-		interruptTriggerDebug = 0;
-		DebugOutput("------------ INTERRUPT TRIGGERED ------------", 999);
-	}
-
-	DebugOutput("About to finish Default Task.", 1);
-	osDelay(2000);
+	osDelay(3000);
 	DebugOutput("Finished Default Task.", 1);
 
   }
@@ -868,11 +841,6 @@ void StartSensorTask(void *argument)
 {
   /* USER CODE BEGIN StartSensorTask */
   /* Infinite loop */
-//  uint8_t numberToSend = 0;
-//	while (1){
-//		DebugOutput("StartSensorTask", 1);
-//		osDelay(2000);
-//	}
 
   for(;;)
   {
@@ -912,10 +880,7 @@ void StartSensorTask(void *argument)
 void StartLoggingTask(void *argument)
 {
   /* USER CODE BEGIN StartLoggingTask */
-//	while(1){
-//		DebugOutput("StartLoggingTask", 1);
-//		osDelay(2000);
-//	}
+
   uint16_t receivedNumber = 0;
 
   /* Infinite loop */
@@ -969,6 +934,108 @@ void StartLoggingTask(void *argument)
 
   }
   /* USER CODE END StartLoggingTask */
+}
+
+/* USER CODE BEGIN Header_StartCommandTask */
+/**
+* @brief Function implementing the commandTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartCommandTask */
+void StartCommandTask(void *argument)
+{
+  /* USER CODE BEGIN StartCommandTask */
+  //lora_mode_receive_single(&lora);
+  //lora_enable_interrupt_tx_done(&lora);
+  lora_enable_interrupt_rx_done(&lora);
+  lora_mode_receive_continuous(&lora); //if receive once, make sure this is set again
+
+  /* Infinite loop */
+  for(;;)
+  {
+	  DebugOutput("Running Command Task.", 1);
+
+	// Receive buffer
+	if (RXBufferStatus == 1){
+		DebugOutput("===========> LoRa Command Received RXBufferStatus: ", RXBufferStatus);
+
+		HAL_USART_Transmit(&husart2, (uint8_t*)RXBuffer, 5U, 10U);
+		HAL_USART_Transmit(&husart2, (uint8_t*)"\r\n", 2U, 10U);
+
+		osStatus_t status = osMessageQueuePut(commandQueueHandle, &RXBuffer, 0, 0);
+		if (status != osOK){
+			DebugOutput("Command FAILED to queue: ", status);
+		} else {
+			DebugOutput("Command OK to queue: ", status);
+		}
+
+		RXBufferStatus = 0; //clear: ready for interrupt to accept the next LoRa packet.
+		osDelay(200);
+	} else { //lora rx text. No buffer yet
+
+	}
+
+	if (interruptTriggerDebug > 0){
+		DebugOutput("------------ INTERRUPT TRIGGERED ------------", interruptTriggerDebug);
+		interruptTriggerDebug = 0;
+	}
+
+	DebugOutput("Ending Command Task.", 1);
+
+    osDelay(1000);
+  }
+  /* USER CODE END StartCommandTask */
+}
+
+/* USER CODE BEGIN Header_StartCommandProcessTask */
+/**
+* @brief Function implementing the commProcessTask thread.
+* @param argument: Not used
+* @retval None
+*/
+/* USER CODE END Header_StartCommandProcessTask */
+void StartCommandProcessTask(void *argument)
+{
+  /* USER CODE BEGIN StartCommandProcessTask */
+  /* Infinite loop */
+
+
+  for(;;)
+  {
+    uint8_t commandQueueBuffer[6] = {0};
+    uint32_t queueCount = osMessageQueueGetCount(commandQueueHandle);
+
+	DebugOutput("CommandQueueCount: ", queueCount);
+
+	if (queueCount > 0){
+		osStatus_t status = osMessageQueueGet(commandQueueHandle, &commandQueueBuffer, NULL, 0);
+
+		if (status == osOK){
+			HAL_USART_Transmit(&husart2, commandQueueBuffer, 6U, 100U);
+			DebugOutput(" ", 999);
+
+			if (strcmp((const char *)commandQueueBuffer, "GET M") == 0){
+				DebugOutput("COMPARED", 999);
+
+				uint8_t res = lora_send_packet_blocking(&lora, (uint8_t *)"ACK GET M", 9U, 200U);
+				if (res == LORA_OK) {
+					HAL_USART_Transmit(&husart2, (uint8_t *)"Success ack from system\r\n", 25U, 100U);
+				} else {
+					HAL_USART_Transmit(&husart2, (uint8_t *)"Error ack from system\r\n", 23U, 100U);
+				}
+
+				lora_mode_receive_continuous(&lora);
+			}
+
+		} else {
+			DebugOutput("Error from command queue...: ", status);
+		}
+	}
+
+	osDelay(4000);
+  }
+  /* USER CODE END StartCommandProcessTask */
 }
 
 /**
