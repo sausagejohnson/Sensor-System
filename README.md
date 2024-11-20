@@ -1,6 +1,8 @@
 # Sensor System Project
 
-This is general sensor system developed as a proof of concept. It is based on the STM32 and FreeRTOS. The project aims to implement battery management, sensor reading, logging, commands and LoRa communication.
+This is a general Sensor System developed as a proof of concept. It is based on the STM32 and FreeRTOS. The project aims to implement battery management, sensor reading, logging, commands and LoRa communication.
+
+There is a companion project, the Sensor System Gateway https://github.com/sausagejohnson/Sensor-System-Gateway which is a USB-based serial terminal that communicates with, and controls this Sensor System.
 
 Code is in C.
 
@@ -10,7 +12,7 @@ Code is in C.
 
 The project is developed under STM32CubeIDE.
 
-Libraries used FATFS, FreeRTOS and FATFS_SD SPI (by Khaled Magdy).
+Libraries used FATFS, FreeRTOS, Tiny LoRa for STM32 HAL (by belyalov) and FATFS_SD SPI (by Khaled Magdy).
 
 
 ## Hardware, Modules and Wiring
@@ -20,6 +22,7 @@ Development: Nucleo STM32F303RE
 Modules currently connected:
 
  - TF Card Memory Shield Module (SPI)
+ - LoRa RFM95 915Mhz 			(SPI)
  - GY-NEO6MV2 NEO-6M GPS Module (RX)
  - Red Generic Turbidity Module (Analogue)
 
