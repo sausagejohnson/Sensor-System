@@ -18,7 +18,8 @@
 
 /**
  * D0 / D1 (PA2/3) used for USART2 for debugging / husart2
- * D2 used for RX for GPS Module to get the current time for the system / huart1
+ * D2 (PA10) used for RX for GPS Module to get the current time for the system / huart1
+ * D5 (PB4) GPS Power pin. Turn off to reset. (check if the module has a dedicated reset)
  * D13 used for onboard LED
  *
  * PB12 (CN10/Pin16) Flash SPI CS
@@ -161,10 +162,15 @@ volatile uint8_t startWaterSensing = 0;
 volatile uint16_t waterSensorValue = 0;
 
 lora_sx1276 lora;
-uint8_t RXBuffer[6];
+uint8_t RXBuffer[64];
 volatile uint8_t RXBufferStatus = 0; //1 is good and ready to read.
 
 volatile uint8_t interruptTriggerDebug = 0; //For testing interrupts
+
+//last recorded readings and data
+uint16_t lastSensorS1Reading = 0;
+logData_t lastLogLineRecorded;
+
 /* USER CODE END 0 */
 
 /**
@@ -207,7 +213,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
   //Add any pre-RTOS code here before it takes over
-  HAL_GPIO_TogglePin(OnboardLED_GPIO_Port, OnboardLED_Pin);
+  HAL_GPIO_WritePin(OnboardLED_GPIO_Port, OnboardLED_Pin, GPIO_PIN_SET);
 
   // SX1276 compatible module connected to SPI1, NSS pin connected to GPIO with label LORA_NSS
   uint8_t res = lora_init(&lora, &hspi3, SPI3_NSS_GPIO_Port, SPI3_NSS_Pin, LORA_BASE_FREQUENCY_US);
@@ -658,7 +664,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, OnboardLED_Pin|TestPin_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(SPI2_CS_GPIO_Port, SPI2_CS_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, SPI2_CS_Pin|GPS_Power_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LORA_RESET_GPIO_Port, LORA_RESET_Pin, GPIO_PIN_SET);
@@ -679,12 +685,12 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : SPI2_CS_Pin */
-  GPIO_InitStruct.Pin = SPI2_CS_Pin;
+  /*Configure GPIO pins : SPI2_CS_Pin GPS_Power_Pin */
+  GPIO_InitStruct.Pin = SPI2_CS_Pin|GPS_Power_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(SPI2_CS_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : SPI3_NSS_Pin */
   GPIO_InitStruct.Pin = SPI3_NSS_Pin;
@@ -712,10 +718,10 @@ static void MX_GPIO_Init(void)
 //Might need to consider:
 //Before starting the next receive operation, make sure the DR register is empty (no data received on the UART interface after the last DR register read) to avoid UART overrun error:
 //you can use this macro to flush the DR register: __HAL_UART_FLUSH_DRREGISTER()
+//I notice with a reset on the power pin, this callback never recovers.
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart){ //call every 16 bytes
 //	okToOutput = 1;
-	HAL_GPIO_TogglePin(OnboardLED_GPIO_Port, OnboardLED_Pin);
-
+//	DebugOutput("HAL_UART_RxCpltCallback", 1);
 	gpsBuffer_WriteStreamDataChunkToCircularBuffer(gps_rxBuffer);
 	gpsBytesInBuffer += 16;
 
@@ -794,8 +800,8 @@ void StartDefaultTask(void *argument)
   {
 	DebugOutput("Running Default Task.", 1);
 
-	sprintf(debugBuffer, "gpsBytesInBuffer: %d\r\n", gpsBytesInBuffer);
-	HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 10U);
+//	sprintf(debugBuffer, "gpsBytesInBuffer: %d\r\n", gpsBytesInBuffer);
+//	HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 10U);
 
 	int gpsTimeSyncRequired = gps_TimeSyncRequired(hrtc);
 
@@ -818,13 +824,13 @@ void StartDefaultTask(void *argument)
 //		RTC_DateTypeDef currentDate;
 //		HAL_RTC_GetDate(&rtc, &currentDate, RTC_FORMAT_BIN);
 
-		DebugOutput("Timesync not required, Water sensing.", 1);
+		DebugOutput("Timesync not required or timed out. Skipping.", 1);
 		startWaterSensing = 1;
 	}
 
 
 	osDelay(3000);
-	DebugOutput("Finished Default Task.", 1);
+	//DebugOutput("Finished Default Task.", 1);
 
   }
   /* USER CODE END 5 */
@@ -844,19 +850,19 @@ void StartSensorTask(void *argument)
 
   for(;;)
   {
-	DebugOutput("StartSensorTask: ", 99);
-	DebugOutput("startWaterSensing --> : ", startWaterSensing);
+	//DebugOutput("StartSensorTask: ", 99);
+	//DebugOutput("startWaterSensing --> : ", startWaterSensing);
 	if (startWaterSensing == 1){
 		//perform task, sense and push to queue
 
 		//if there is an existing sense value, log it
 //		if (waterSensorValue > 0){
 			int16_t waterSensorValueForQueue = waterSensorValue;
-			DebugOutput("WATER VALUE TO LOG -->: ", waterSensorValueForQueue);
+			lastSensorS1Reading = waterSensorValue;
+//			DebugOutput("WATER VALUE TO LOG -->: ", waterSensorValueForQueue);
 			osStatus_t status = osMessageQueuePut(sensorQueueHandle, &waterSensorValueForQueue, 0, 0);
-			DebugOutput("SensorMessagePut: ", status);
-
 			DebugOutput("Water value sent to the queue: ", waterSensorValueForQueue);
+			DebugOutput("Sensor value queuing result: ", status);
 //		}
 
 
@@ -886,7 +892,7 @@ void StartLoggingTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	DebugOutput("Logging from the queue: ", 1);
+	//DebugOutput("Logging from the queue: ", 1);
 
 	if (startWaterSensing == 1){
 
@@ -900,7 +906,7 @@ void StartLoggingTask(void *argument)
 			if (status == osOK){
 //				waterSensorValue = 0; //clear value for next reading.
 
-				DebugOutput("Received...: ", receivedNumber);
+//				DebugOutput("Received...: ", receivedNumber);
 
 				char timeDateBuffer[30];
 				getSystemDateTimeFormatted(timeDateBuffer);
@@ -910,15 +916,18 @@ void StartLoggingTask(void *argument)
 				data.typeCode = 'W';
 				data.value = receivedNumber;
 
-				sprintf(debugBuffer, "Logging from task: %s, %c, %d\r\n", data.dateTime, data.typeCode, data.value);
+				sprintf(debugBuffer, "Logging sensor data: %s, %c, %d\r\n", data.dateTime, data.typeCode, data.value);
 				HAL_USART_Transmit(&husart2, (uint8_t*)debugBuffer, strlen(debugBuffer), 10U);
 
-//				portENTER_CRITICAL();
 				logger_log(data);
-//				portEXIT_CRITICAL();
+				lastLogLineRecorded = data;
 
-				//DebugOutput("2 secs to remove card.", 0);
-				osDelay(2000);
+				//Light LED to indicate safe period to reset or unplug
+				HAL_GPIO_WritePin(OnboardLED_GPIO_Port, OnboardLED_Pin, GPIO_PIN_SET);
+				DebugOutput("5 seconds to remove card.", 0);
+				osDelay(5000);
+				HAL_GPIO_WritePin(OnboardLED_GPIO_Port, OnboardLED_Pin, GPIO_PIN_RESET);
+
 				//DebugOutput("End Log. Do not remove card.", 0);
 
 
@@ -954,34 +963,35 @@ void StartCommandTask(void *argument)
   /* Infinite loop */
   for(;;)
   {
-	  DebugOutput("Running Command Task.", 1);
+//	  DebugOutput("Running Command Task.", 1);
 
 	// Receive buffer
 	if (RXBufferStatus == 1){
-		DebugOutput("===========> LoRa Command Received RXBufferStatus: ", RXBufferStatus);
+		DebugOutput("===========> INTERRUPT TRIGGERED LoRa Command Received RXBufferStatus: ", RXBufferStatus);
 
-		HAL_USART_Transmit(&husart2, (uint8_t*)RXBuffer, 5U, 10U);
+		HAL_USART_Transmit(&husart2, (uint8_t*)RXBuffer, 6U, 10U);
 		HAL_USART_Transmit(&husart2, (uint8_t*)"\r\n", 2U, 10U);
 
 		osStatus_t status = osMessageQueuePut(commandQueueHandle, &RXBuffer, 0, 0);
 		if (status != osOK){
-			DebugOutput("Command FAILED to queue: ", status);
+//			DebugOutput("Command FAILED to queue: ", status);
 		} else {
-			DebugOutput("Command OK to queue: ", status);
+//			DebugOutput("Command OK to queue: ", status);
 		}
 
+		memset(RXBuffer, '\0', sizeof(RXBuffer));
 		RXBufferStatus = 0; //clear: ready for interrupt to accept the next LoRa packet.
 		osDelay(200);
 	} else { //lora rx text. No buffer yet
 
 	}
 
-	if (interruptTriggerDebug > 0){
-		DebugOutput("------------ INTERRUPT TRIGGERED ------------", interruptTriggerDebug);
-		interruptTriggerDebug = 0;
-	}
+//	if (interruptTriggerDebug > 0){
+//		DebugOutput("------------ INTERRUPT TRIGGERED ------------", interruptTriggerDebug);
+//		interruptTriggerDebug = 0;
+//	}
 
-	DebugOutput("Ending Command Task.", 1);
+	//DebugOutput("Ending Command Task.", 1);
 
     osDelay(1000);
   }
@@ -1000,13 +1010,14 @@ void StartCommandProcessTask(void *argument)
   /* USER CODE BEGIN StartCommandProcessTask */
   /* Infinite loop */
 
+  uint8_t gatewayResponseBuffer[64];
 
   for(;;)
   {
     uint8_t commandQueueBuffer[6] = {0};
     uint32_t queueCount = osMessageQueueGetCount(commandQueueHandle);
 
-	DebugOutput("CommandQueueCount: ", queueCount);
+//	DebugOutput("CommandQueueCount: ", queueCount);
 
 	if (queueCount > 0){
 		osStatus_t status = osMessageQueueGet(commandQueueHandle, &commandQueueBuffer, NULL, 0);
@@ -1015,10 +1026,57 @@ void StartCommandProcessTask(void *argument)
 			HAL_USART_Transmit(&husart2, commandQueueBuffer, 6U, 100U);
 			DebugOutput(" ", 999);
 
-			if (strcmp((const char *)commandQueueBuffer, "GET M") == 0){
-				DebugOutput("COMPARED", 999);
+			if (strcmp((const char *)commandQueueBuffer, "GET S1") == 0){
+				DebugOutput("GET S1 COMPARED", 999);
 
-				uint8_t res = lora_send_packet_blocking(&lora, (uint8_t *)"ACK GET M", 9U, 200U);
+				sprintf((char *)gatewayResponseBuffer, "Sensor S1 last reading was: %d", lastSensorS1Reading);
+				uint8_t res = lora_send_packet_blocking(&lora, gatewayResponseBuffer, strlen((char*)gatewayResponseBuffer), 200U);
+				if (res == LORA_OK) {
+					DebugOutput("Successful send to the gateway", res);
+				} else {
+					DebugOutput("Unsuccessful send to the gateway", res);
+				}
+
+				lora_mode_receive_continuous(&lora);
+			}
+
+			if (strcmp((const char *)commandQueueBuffer, "GET L") == 0){
+				DebugOutput("GET L COMPARED", 999);
+
+				sprintf((char *)gatewayResponseBuffer, "LOG: %c | %d | %s ", lastLogLineRecorded.typeCode, lastLogLineRecorded.value, lastLogLineRecorded.dateTime);
+				uint8_t res = lora_send_packet_blocking(&lora, gatewayResponseBuffer, strlen((char*)gatewayResponseBuffer), 200U);
+				if (res == LORA_OK) {
+					DebugOutput("Successful send to the gateway", res);
+				} else {
+					DebugOutput("Unsuccessful send to the gateway", res);
+				}
+
+				lora_mode_receive_continuous(&lora);
+			}
+
+			if (strcmp((const char *)commandQueueBuffer, "PING") == 0){
+				DebugOutput("PING COMPARED", 999);
+
+				uint8_t res = lora_send_packet_blocking(&lora, (uint8_t *)"PONG", 4U, 200U);
+				if (res == LORA_OK) {
+					HAL_USART_Transmit(&husart2, (uint8_t *)"Success ack from system\r\n", 25U, 100U);
+				} else {
+					HAL_USART_Transmit(&husart2, (uint8_t *)"Error ack from system\r\n", 23U, 100U);
+				}
+
+				lora_mode_receive_continuous(&lora);
+			}
+
+			if (strcmp((const char *)commandQueueBuffer, "RES G") == 0){
+				DebugOutput("RES G COMPARED", 999);
+
+				HAL_GPIO_WritePin(GPS_Power_GPIO_Port, GPS_Power_Pin, GPIO_PIN_RESET);
+				osDelay(1000);
+				HAL_GPIO_WritePin(GPS_Power_GPIO_Port, GPS_Power_Pin, GPIO_PIN_SET);
+				gps_ResetSyncAttempts();
+				HAL_UART_Receive_IT(&huart1, gps_rxBuffer, 16);
+
+				uint8_t res = lora_send_packet_blocking(&lora, (uint8_t *)"GPS module reset", 16U, 200U);
 				if (res == LORA_OK) {
 					HAL_USART_Transmit(&husart2, (uint8_t *)"Success ack from system\r\n", 25U, 100U);
 				} else {

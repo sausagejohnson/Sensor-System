@@ -13,5 +13,6 @@
 
 void gps_DownloadDateTimeViaSatellite(RTC_HandleTypeDef rtc);
 int gps_TimeSyncRequired(RTC_HandleTypeDef rtc);
+void gps_ResetSyncAttempts();
 
 #endif /* GPS_H_ */

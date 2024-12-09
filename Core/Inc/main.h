@@ -81,6 +81,8 @@ void DebugOutput(const char *message, int16_t number);
 #define SPI3_NSS_GPIO_Port GPIOD
 #define SWO_Pin GPIO_PIN_3
 #define SWO_GPIO_Port GPIOB
+#define GPS_Power_Pin GPIO_PIN_4
+#define GPS_Power_GPIO_Port GPIOB
 #define DIO0_EXTI5_Pin GPIO_PIN_5
 #define DIO0_EXTI5_GPIO_Port GPIOB
 #define DIO0_EXTI5_EXTI_IRQn EXTI9_5_IRQn

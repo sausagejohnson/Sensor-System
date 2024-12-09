@@ -58,3 +58,7 @@ int gps_TimeSyncRequired(RTC_HandleTypeDef rtc){
 	//System year of 0 determines if sync is required
 	return currentDate.Year == 0;
 }
+
+void gps_ResetSyncAttempts(){
+	numberOfAttempts = 0;
+}
